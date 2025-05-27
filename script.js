@@ -1,15 +1,12 @@
-/**************************************************
- * 1.  INIT MAP
- **************************************************/
+/***********************
+ *  SET-UP
+ **********************/
 const map = L.map('map').setView([37.5, -119.5], 6);
-
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution : '&copy; OpenStreetMap contributors'
+  attribution: '© OpenStreetMap'
 }).addTo(map);
 
-/**************************************************
- * 2.  CONFIG
- **************************************************/
+// which CSV to open for each dropdown item
 const csvFiles = {
   'Ozone Pctl'            : 'data/calenviroscreen.csv',
   'Drinking Water Pctl'   : 'data/calenviroscreen.csv',
@@ -21,63 +18,70 @@ const csvFiles = {
   'section221'            : 'data/section221.csv'
 };
 
-// colour scale used for every metric (0‒100)
-const colorScale = d3.scaleSequential(d3.interpolateOrRd).domain([0, 100]);
+// d3 colour scale template (domain will be set per-metric)
+const colour = d3.scaleSequential(d3.interpolateOrRd);
 
-let geojsonLayer;            // Leaflet layer with county polygons
-let currentMetric = 'Ozone Pctl';
+let countyLayer;   // Leaflet GeoJSON layer (drawn once)
 
-/**************************************************
- * 3.  LOAD COUNTY SHAPES ONCE
- **************************************************/
+/***********************
+ *  LOAD COUNTY SHAPES
+ **********************/
 d3.json('data/california-counties.geojson').then(geo => {
-  geojsonLayer = L.geoJSON(geo, {
-    style: { weight: 1, color: 'white', fillOpacity: 0.8 },
-    onEachFeature: (feature, layer) => {
+  countyLayer = L.geoJSON(geo, {
+    weight: 1,  color: '#fff', fillOpacity: 0.85,
+    onEachFeature(feature, layer) {
       layer.bindPopup('Loading…');
     }
   }).addTo(map);
 
-  // Initial metric
-  updateMetric(currentMetric);
+  // first render
+  applyMetric('Ozone Pctl');
 });
 
-/**************************************************
- * 4.  METRIC SWITCHER
- **************************************************/
+/***********************
+ *  DROPDOWN LISTENER
+ **********************/
 document
   .getElementById('dataset-toggle')
-  .addEventListener('change', e => updateMetric(e.target.value));
+  .addEventListener('change', e => applyMetric(e.target.value));
 
-/**************************************************
- * 5.  MAIN UPDATE FUNCTION
- **************************************************/
-function updateMetric(metric) {
-  currentMetric = metric;
+/***********************
+ *  MAIN FUNCTION
+ **********************/
+function applyMetric(metric) {
   const csvPath = csvFiles[metric];
 
-  d3.csv(csvPath).then(data => {
-    /* ---- Build lookup table ---- */
-    const dataMap = {};
-    data.forEach(d => {
-      const key = d.County.trim().toLowerCase();
-      dataMap[key] = +d[metric]; // NaN if blank
+  d3.csv(csvPath).then(rows => {
+    /* ---- build lookup { countyKey -> numericValue } ---- */
+    const lookup = {};
+    rows.forEach(r => {
+      const key = (r.County || '').trim().toLowerCase();
+      const val = +r[metric];            // NaN if blank / non-numeric
+      lookup[key] = val;
     });
 
-    /* ---- Update each polygon ---- */
-    geojsonLayer.eachLayer(layer => {
-      const rawName   = layer.feature.properties.NAME || layer.feature.properties.name;
-      const key       = rawName.trim().toLowerCase();
-      const value     = dataMap[key];
+    /* ---- determine colour scale limits ---- */
+    const numericVals = Object.values(lookup).filter(v => isFinite(v));
+    const minVal = d3.min(numericVals);
+    const maxVal = d3.max(numericVals);
+    colour.domain([minVal, maxVal]);     // e.g. [5, 95]
 
-      // Attach value into the shapefile properties for later use
+    /* ---- update every polygon ---- */
+    countyLayer.eachLayer(layer => {
+      const raw   = (layer.feature.properties.NAME || '').trim();
+      const key   = raw.toLowerCase();
+      const value = lookup[key];
+
+      // write value into the feature for future use
       layer.feature.properties[metric] = value;
 
-      // Update style & popup
+      // style + popup
       layer.setStyle({
-        fillColor : isFinite(value) ? colorScale(value) : '#cccccc'
+        fillColor: isFinite(value) ? colour(value) : '#cccccc'
       });
-      layer.setPopupContent(`${rawName}: ${isFinite(value) ? value : 'N/A'}`);
+      layer.setPopupContent(
+        `${raw}: ${ isFinite(value) ? value : 'N/A' }`
+      );
     });
   });
 }
